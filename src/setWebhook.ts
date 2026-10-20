@@ -1,6 +1,5 @@
 import { Api } from "grammy";
-import type { BotCommand } from "grammy/types";
-import { commandDescriptions } from "./bot/messages.ts";
+import { registerCommands } from "./bot/commands.ts";
 import { ConfigError, loadWebhookSecret } from "./config.ts";
 import { createLogger, describeError } from "./logger.ts";
 
@@ -25,8 +24,7 @@ async function main(): Promise<void> {
       allowed_updates: ["message", "callback_query"],
       drop_pending_updates: false,
     });
-    const commands: BotCommand[] = commandDescriptions.map((c) => ({ command: c.command, description: c.description }));
-    await api.setMyCommands(commands);
+    await registerCommands(api);
 
     const info = await api.getWebhookInfo();
     logger.info("Webhook configured", {

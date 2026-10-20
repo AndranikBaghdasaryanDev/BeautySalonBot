@@ -42,6 +42,8 @@ export const CUSTOMER_SCHEMA: Document = {
     profilePhotoFileId: nullableString,
     profilePhotoFileUniqueId: nullableString,
     profilePhotoCheckedAt: nullableDate,
+    // Optional: only present once the user picked a language.
+    preferredLanguage: { bsonType: ["string", "null"], enum: ["hy", "ru", "en", null] },
     registrationSource: { bsonType: "string" },
     lastEvent: { bsonType: "string" },
     registeredAt: { bsonType: "date" },

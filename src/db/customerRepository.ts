@@ -1,4 +1,5 @@
 import type { Collection, Db, Document, ObjectId } from "mongodb";
+import { isLang, type Lang } from "../i18n.ts";
 import { COLLECTIONS, isDuplicateKeyError } from "./mongo.ts";
 
 /** Telegram metadata observed in a single update. */
@@ -19,6 +20,7 @@ export interface Customer extends TelegramProfileSnapshot {
   readonly profilePhotoFileId: string | null;
   readonly profilePhotoFileUniqueId: string | null;
   readonly profilePhotoCheckedAt: Date | null;
+  readonly preferredLanguage: Lang | null;
   readonly registrationSource: string;
   readonly lastEvent: string;
   readonly registeredAt: Date;
@@ -41,8 +43,10 @@ export interface CustomerRepository {
   /** Creates the customer or refreshes its metadata. Idempotent per Telegram user. */
   registerOrUpdate(snapshot: TelegramProfileSnapshot, source: string, event: string, at: Date): Promise<UpsertResult>;
   /** Refreshes metadata of an already registered customer. Never creates a record. */
-  touchIfRegistered(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<boolean>;
+  touchIfRegistered(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<Customer | null>;
   findByTelegramUserId(telegramUserId: bigint): Promise<Customer | null>;
+  /** Returns false when the user is not registered. */
+  setPreferredLanguage(telegramUserId: bigint, lang: Lang, at: Date): Promise<boolean>;
   updateProfilePhoto(telegramUserId: bigint, photo: ProfilePhoto | null, checkedAt: Date): Promise<void>;
   deleteByTelegramUserId(telegramUserId: bigint): Promise<boolean>;
   count(): Promise<number>;
@@ -62,6 +66,7 @@ export interface CustomerDocument {
   profilePhotoFileId: string | null;
   profilePhotoFileUniqueId: string | null;
   profilePhotoCheckedAt: Date | null;
+  preferredLanguage?: string | null;
   registrationSource: string;
   lastEvent: string;
   registeredAt: Date;
@@ -85,6 +90,7 @@ function toCustomer(doc: CustomerDocument): Customer {
     profilePhotoFileId: doc.profilePhotoFileId,
     profilePhotoFileUniqueId: doc.profilePhotoFileUniqueId,
     profilePhotoCheckedAt: doc.profilePhotoCheckedAt,
+    preferredLanguage: isLang(doc.preferredLanguage) ? doc.preferredLanguage : null,
     registrationSource: doc.registrationSource,
     lastEvent: doc.lastEvent,
     registeredAt: doc.registeredAt,
@@ -179,11 +185,19 @@ export class MongoCustomerRepository implements CustomerRepository {
     return { customer: toCustomer(result.value), created: result.lastErrorObject?.updatedExisting !== true };
   }
 
-  async touchIfRegistered(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<boolean> {
-    const result = await this.collection.updateOne(
+  async touchIfRegistered(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<Customer | null> {
+    const doc = await this.collection.findOneAndUpdate(
       { telegramUserId: snapshot.telegramUserId },
       upsertPipeline(snapshot, "unused", event, at),
-      { upsert: false },
+      { upsert: false, returnDocument: "after" },
+    );
+    return doc === null ? null : toCustomer(doc);
+  }
+
+  async setPreferredLanguage(telegramUserId: bigint, lang: Lang, at: Date): Promise<boolean> {
+    const result = await this.collection.updateOne(
+      { telegramUserId },
+      { $set: { preferredLanguage: lang, updatedAt: at } },
     );
     return result.matchedCount > 0;
   }

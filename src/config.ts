@@ -1,17 +1,21 @@
+import { LANGUAGES, isLang, type Lang, type Localized } from "./i18n.ts";
+
 export type BotMode = "polling" | "webhook";
 
 export interface SalonService {
   readonly name: string;
-  readonly price: string;
+  readonly price: string | null;
   readonly duration: string | null;
 }
 
 export interface SalonConfig {
   readonly name: string;
-  readonly address: string;
-  readonly contact: string;
-  readonly workingHours: string | null;
-  readonly services: readonly SalonService[];
+  readonly contact: Localized<string>;
+  readonly address: Localized<string>;
+  readonly workingHours: Localized<string | null>;
+  readonly services: Localized<readonly SalonService[]>;
+  /** Used until the user picks a language, when Telegram's language is unsupported. */
+  readonly defaultLanguage: Lang;
 }
 
 export interface WebhookConfig {
@@ -70,8 +74,8 @@ function positiveInteger(env: Env, key: string, fallback: number): number {
 }
 
 /**
- * Parses BEAUTY_SALON_SERVICES. Entries are separated by ";" and each entry is
- * "name|price|duration" where duration is optional.
+ * Parses a services list. Entries are separated by ";" and each entry is
+ * "name|price|duration" where price and duration are optional.
  */
 export function parseServices(raw: string | null): SalonService[] {
   if (raw === null) return [];
@@ -81,11 +85,61 @@ export function parseServices(raw: string | null): SalonService[] {
     .filter((entry) => entry !== "")
     .map((entry) => {
       const [name = "", price = "", duration = ""] = entry.split("|").map((part) => part.trim());
-      if (name === "" || price === "") {
-        throw new ConfigError(`Invalid BEAUTY_SALON_SERVICES entry "${entry}". Expected "name|price|duration"`);
+      if (name === "") {
+        throw new ConfigError(`Invalid services entry "${entry}". Expected "name|price|duration"`);
       }
-      return { name, price, duration: duration === "" ? null : duration };
+      return { name, price: price === "" ? null : price, duration: duration === "" ? null : duration };
     });
+}
+
+/**
+ * Reads KEY_HY / KEY_RU / KEY_EN, falling back to KEY for languages without
+ * their own value.
+ */
+function localized(env: Env, key: string): Localized<string | null> {
+  const base = optional(env, key);
+  const result: Record<Lang, string | null> = { hy: null, ru: null, en: null };
+  for (const lang of LANGUAGES) {
+    result[lang] = optional(env, `${key}_${lang.toUpperCase()}`) ?? base;
+  }
+  return result;
+}
+
+function requiredLocalized(env: Env, key: string): Localized<string> {
+  const values = localized(env, key);
+  const result: Record<Lang, string> = { hy: "", ru: "", en: "" };
+  for (const lang of LANGUAGES) {
+    const value = values[lang];
+    if (value === null) {
+      throw new ConfigError(`Missing required environment variable ${key} (or ${key}_${lang.toUpperCase()})`);
+    }
+    result[lang] = value;
+  }
+  return result;
+}
+
+function parseDefaultLanguage(env: Env): Lang {
+  const raw = optional(env, "DEFAULT_LANGUAGE") ?? "hy";
+  if (!isLang(raw)) {
+    throw new ConfigError(`DEFAULT_LANGUAGE must be one of ${LANGUAGES.join(", ")}`);
+  }
+  return raw;
+}
+
+function parseSalon(env: Env): SalonConfig {
+  const services = localized(env, "BEAUTY_SALON_SERVICES");
+  return {
+    name: required(env, "BEAUTY_SALON_NAME"),
+    contact: requiredLocalized(env, "BEAUTY_SALON_CONTACT"),
+    address: requiredLocalized(env, "BEAUTY_SALON_ADDRESS"),
+    workingHours: localized(env, "BEAUTY_SALON_WORKING_HOURS"),
+    services: {
+      hy: parseServices(services.hy),
+      ru: parseServices(services.ru),
+      en: parseServices(services.en),
+    },
+    defaultLanguage: parseDefaultLanguage(env),
+  };
 }
 
 const DB_NAME_PATTERN = /^[A-Za-z0-9_-]{1,38}$/;
@@ -149,12 +203,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
     webhook: modeRaw === "webhook" ? parseWebhook(env) : null,
     mongo: loadMongoConfig(env),
     profilePhotoRefreshHours: positiveInteger(env, "PROFILE_PHOTO_REFRESH_HOURS", 24),
-    salon: {
-      name: required(env, "BEAUTY_SALON_NAME"),
-      address: required(env, "BEAUTY_SALON_ADDRESS"),
-      contact: required(env, "BEAUTY_SALON_CONTACT"),
-      workingHours: optional(env, "BEAUTY_SALON_WORKING_HOURS"),
-      services: parseServices(optional(env, "BEAUTY_SALON_SERVICES")),
-    },
+    salon: parseSalon(env),
   };
 }

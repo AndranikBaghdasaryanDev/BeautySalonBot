@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { User } from "grammy/types";
-import { callbacks } from "../src/bot/keyboards.ts";
+import { callbacks, languageCallback } from "../src/bot/keyboards.ts";
 import * as messages from "../src/bot/messages.ts";
 import { MongoCustomerRepository } from "../src/db/customerRepository.ts";
+import type { Lang } from "../src/i18n.ts";
 import {
   TEST_TOKEN,
   TestMongo,
@@ -26,9 +27,19 @@ async function context(options: Parameters<typeof setup>[1] = {}): Promise<TestC
 }
 
 const userId = BigInt(defaultUser.id);
+const en = messages.t("en");
+
+/** Registers the default user and picks a language, then forgets the calls made so far. */
+async function registered(lang: Lang = "en", options: Parameters<typeof setup>[1] = {}): Promise<TestContext> {
+  const ctx = await context(options);
+  await ctx.send(messageUpdate("/start"));
+  await ctx.send(callbackUpdate(languageCallback(lang)));
+  ctx.telegram.calls.length = 0;
+  return ctx;
+}
 
 describe("/start registration", () => {
-  it("registers a new user and shows the welcome message with the main menu", async () => {
+  it("registers a new user and asks for a language", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("/start"));
 
@@ -42,13 +53,13 @@ describe("/start registration", () => {
     assert.equal(customer.chatType, "private");
     assert.equal(customer.telegramChatId, userId);
     assert.equal(customer.registrationSource, "start");
+    assert.equal(customer.preferredLanguage, null);
     assert.deepEqual(customer.registeredAt, ctx.clock.now);
 
-    const [welcome] = ctx.telegram.callsTo("sendMessage");
-    assert.ok(welcome);
-    assert.match(String(welcome.payload.text), /Welcome to <b>Test Salon<\/b>, Anna/);
-    assert.equal(welcome.payload.parse_mode, "HTML");
-    assert.ok(JSON.stringify(welcome.payload.reply_markup).includes(callbacks.services));
+    const [prompt] = ctx.telegram.callsTo("sendMessage");
+    assert.equal(prompt?.payload.text, messages.LANGUAGE_PROMPT);
+    const keyboard = JSON.stringify(prompt.payload.reply_markup);
+    for (const lang of ["hy", "ru", "en"] as const) assert.ok(keyboard.includes(languageCallback(lang)));
   });
 
   it("records the deep-link source", async () => {
@@ -66,21 +77,20 @@ describe("/start registration", () => {
     assert.equal(customer.username, null);
     assert.equal(customer.lastName, null);
     assert.equal(customer.languageCode, null);
-    assert.match(ctx.telegram.sentTexts()[0] ?? "", /Mia/);
   });
 
-  it("does not create duplicates when an existing user presses /start again", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start"));
-    const registeredAt = ctx.clock.now;
+  it("does not create duplicates and greets returning users in their language", async () => {
+    const ctx = await registered("ru");
+    const registeredAt = (await ctx.customers.findByTelegramUserId(userId))?.registeredAt;
     ctx.clock.now = new Date("2026-01-05T09:00:00.000Z");
     await ctx.send(messageUpdate("/start"));
 
     assert.equal(await ctx.customers.count(), 1);
     const customer = await ctx.customers.findByTelegramUserId(userId);
-    assert.deepEqual(customer?.registeredAt, registeredAt);
+    assert.ok(customer);
+    assert.deepEqual(customer.registeredAt, registeredAt);
     assert.deepEqual(customer.lastInteractionAt, ctx.clock.now);
-    assert.match(ctx.telegram.sentTexts()[1] ?? "", /Welcome back, Anna/);
+    assert.match(ctx.telegram.sentTexts()[0] ?? "", /Рады снова вас видеть, Anna!/);
   });
 
   it("updates changed profile data and keeps values missing from the update", async () => {
@@ -170,7 +180,7 @@ describe("/start registration", () => {
     assert.equal(ctx.telegram.callsTo("sendMessage").length, 1);
   });
 
-  it("replies with a friendly error when the database fails", async () => {
+  it("replies with a friendly error in the user's language when the database fails", async () => {
     const ctx = await context({
       customers: (db) => {
         const real = new MongoCustomerRepository(db);
@@ -178,6 +188,7 @@ describe("/start registration", () => {
           registerOrUpdate: () => Promise.reject(new Error("connection lost")),
           touchIfRegistered: () => Promise.reject(new Error("connection lost")),
           findByTelegramUserId: () => Promise.reject(new Error("connection lost")),
+          setPreferredLanguage: () => Promise.reject(new Error("connection lost")),
           updateProfilePhoto: (...args) => real.updateProfilePhoto(...args),
           deleteByTelegramUserId: () => Promise.reject(new Error("connection lost")),
           count: () => real.count(),
@@ -188,8 +199,8 @@ describe("/start registration", () => {
     await ctx.send(messageUpdate("/delete_my_data"));
     await ctx.send(callbackUpdate(callbacks.confirmDelete));
     const texts = ctx.telegram.sentTexts();
-    assert.equal(texts[0], messages.genericError);
-    assert.equal(texts.at(-1), messages.genericError);
+    assert.equal(texts[0], en.genericError);
+    assert.equal(texts.at(-1), en.genericError);
   });
 
   it("ignores /start from bot accounts", async () => {
@@ -199,18 +210,80 @@ describe("/start registration", () => {
   });
 });
 
+describe("languages", () => {
+  for (const [lang, greeting] of [
+    ["hy", /Բարի գալուստ <b>Test Salon<\/b>, Anna։/],
+    ["ru", /Добро пожаловать в <b>Test Salon<\/b>, Anna!/],
+    ["en", /Welcome to <b>Test Salon<\/b>, Anna!/],
+  ] as const) {
+    it(`saves ${lang} as the chosen language and answers in it`, async () => {
+      const ctx = await context();
+      await ctx.send(messageUpdate("/start"));
+      await ctx.send(callbackUpdate(languageCallback(lang)));
+
+      assert.equal((await ctx.customers.findByTelegramUserId(userId))?.preferredLanguage, lang);
+      assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, messages.t(lang).languageChosen);
+      const welcome = ctx.telegram.callsTo("sendMessage").at(-1);
+      assert.match(String(welcome?.payload.text), greeting);
+      assert.ok(JSON.stringify(welcome?.payload.reply_markup).includes(messages.t(lang).buttons.services));
+
+      const chatCommands = ctx.telegram.callsTo("setMyCommands")[0]?.payload;
+      assert.deepEqual(chatCommands?.scope, { type: "chat", chat_id: defaultUser.id });
+
+      ctx.telegram.calls.length = 0;
+      await ctx.send(messageUpdate("/help"));
+      assert.equal(ctx.telegram.sentTexts()[0], messages.help(lang, testSalon));
+    });
+  }
+
+  it("lets users change the language later", async () => {
+    const ctx = await registered("en");
+    await ctx.send(messageUpdate("/language"));
+    assert.equal(ctx.telegram.sentTexts()[0], messages.LANGUAGE_PROMPT);
+    await ctx.send(callbackUpdate(callbacks.language));
+    assert.equal(ctx.telegram.sentTexts()[1], messages.LANGUAGE_PROMPT);
+    await ctx.send(callbackUpdate(languageCallback("hy")));
+    assert.equal((await ctx.customers.findByTelegramUserId(userId))?.preferredLanguage, "hy");
+    await ctx.send(messageUpdate("/services"));
+    assert.match(ctx.telegram.sentTexts().at(-1) ?? "", /Մանիկյուր/);
+  });
+
+  it("uses Telegram's app language before a choice is made", async () => {
+    const ctx = await context();
+    await ctx.send(messageUpdate("/contact", { from: { ...defaultUser, language_code: "ru" } }));
+    assert.match(ctx.telegram.sentTexts()[0] ?? "", /\[Адрес\]/);
+    await ctx.send(messageUpdate("/contact", { from: { ...defaultUser, language_code: "de" } }));
+    assert.match(ctx.telegram.sentTexts()[1] ?? "", /\[Հասցե\]/);
+  });
+
+  it("ignores unknown language buttons", async () => {
+    const ctx = await registered("en");
+    await ctx.send(callbackUpdate("lang:xx"));
+    assert.equal((await ctx.customers.findByTelegramUserId(userId))?.preferredLanguage, "en");
+  });
+
+  it("has every text in every language", () => {
+    for (const lang of ["hy", "ru", "en"] as const) {
+      const text = messages.t(lang);
+      for (const value of Object.values(text.buttons)) assert.ok(value.length > 0);
+      assert.equal(messages.commandList(lang).length, messages.COMMANDS.length);
+      for (const { description } of messages.commandList(lang)) assert.ok(description.length >= 3);
+    }
+  });
+});
+
 describe("interactions", () => {
-  it("does not register users who only send messages", async () => {
+  it("does not register users who only send messages or press buttons", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("hello"));
     await ctx.send(messageUpdate("/help"));
     await ctx.send(callbackUpdate(callbacks.services));
+    await ctx.send(callbackUpdate(languageCallback("ru")));
     assert.equal(await ctx.customers.count(), 0);
   });
 
   it("updates last interaction for registered users", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start"));
+    const ctx = await registered();
     ctx.clock.now = new Date("2026-02-01T00:00:00.000Z");
     await ctx.send(messageUpdate("/services"));
     const customer = await ctx.customers.findByTelegramUserId(userId);
@@ -219,29 +292,40 @@ describe("interactions", () => {
   });
 
   it("answers informational commands", async () => {
-    const ctx = await context();
+    const ctx = await registered("en");
     for (const command of ["/help", "/services", "/contact", "/privacy"]) {
       await ctx.send(messageUpdate(command));
     }
     const [help, services, contact, privacy] = ctx.telegram.sentTexts();
-    assert.equal(help, messages.help(testSalon));
-    assert.match(services ?? "", /Service A/);
+    assert.equal(help, messages.help("en", testSalon));
+    assert.match(services ?? "", /Service A<\/b> — \[price\] · 60 min/);
     assert.match(contact ?? "", /\[Placeholder address\]/);
     assert.match(privacy ?? "", /do <b>not<\/b> ask for or store phone numbers, birthdays or your Telegram bio/);
   });
 
+  it("shows a price note when services have no price", async () => {
+    const ctx = await registered("hy");
+    await ctx.send(messageUpdate("/services"));
+    const text = ctx.telegram.sentTexts()[0] ?? "";
+    assert.match(text, /• <b>Մանիկյուր<\/b>\n/);
+    assert.ok(text.endsWith(messages.t("hy").priceNote));
+  });
+
   it("handles main menu buttons", async () => {
-    const ctx = await context();
+    const ctx = await registered("en");
     await ctx.send(callbackUpdate(callbacks.contact));
     assert.equal(ctx.telegram.callsTo("answerCallbackQuery").length, 1);
-    assert.equal(ctx.telegram.sentTexts()[0], messages.contact(testSalon));
+    assert.equal(ctx.telegram.sentTexts()[0], messages.contact("en", testSalon));
   });
 
   it("never asks for phone numbers, birthdays or bios", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("/start"));
-    for (const command of ["/help", "/services", "/contact", "/privacy", "/delete_my_data"]) {
-      await ctx.send(messageUpdate(command));
+    for (const lang of ["hy", "ru", "en"] as const) {
+      await ctx.send(callbackUpdate(languageCallback(lang)));
+      for (const command of ["/help", "/services", "/contact", "/privacy", "/delete_my_data"]) {
+        await ctx.send(messageUpdate(command));
+      }
     }
     const payloads = JSON.stringify(ctx.telegram.calls.map((call) => call.payload));
     assert.ok(!payloads.includes("request_contact"));
@@ -252,16 +336,13 @@ describe("interactions", () => {
 
 describe("stored data stays hidden from users", () => {
   it("never shows stored profile data in any reply", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start"));
+    const ctx = await registered("en");
     for (const input of ["/profile", "/help", "/services", "/contact", "/privacy", "hello"]) {
       await ctx.send(messageUpdate(input));
     }
     await ctx.send(callbackUpdate("menu:profile"));
-    // The stored data is in the database...
     assert.equal((await ctx.customers.findByTelegramUserId(userId))?.username, "anna_s");
-    // ...but no message after the welcome reveals the ID, username or surname.
-    for (const text of ctx.telegram.sentTexts().slice(1)) {
+    for (const text of ctx.telegram.sentTexts()) {
       assert.ok(!text.includes(String(defaultUser.id)));
       assert.ok(!text.includes("anna_s"));
       assert.ok(!text.includes("Smith"));
@@ -269,27 +350,27 @@ describe("stored data stays hidden from users", () => {
   });
 
   it("has no profile button or command", async () => {
-    const ctx = await context();
+    const ctx = await registered("en");
     await ctx.send(messageUpdate("/start"));
     const menu = JSON.stringify(ctx.telegram.callsTo("sendMessage")[0]?.payload.reply_markup);
     assert.ok(!menu.includes("profile"));
-    assert.ok(!messages.commandDescriptions.some((c) => c.command.includes("profile")));
+    assert.ok(!messages.COMMANDS.some((command) => command.includes("profile")));
     await ctx.send(messageUpdate("/profile"));
-    assert.equal(ctx.telegram.sentTexts().at(-1), messages.unknownInput);
+    assert.equal(ctx.telegram.sentTexts().at(-1), en.unknownInput);
   });
 });
 
 describe("/delete_my_data", () => {
   it("deletes the customer after confirmation", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start"));
+    const ctx = await registered("ru");
     await ctx.send(messageUpdate("/delete_my_data"));
-    assert.equal(ctx.telegram.sentTexts()[1], messages.deleteConfirm);
+    assert.equal(ctx.telegram.sentTexts()[0], messages.t("ru").deleteConfirm);
     assert.equal(await ctx.customers.count(), 1);
 
     await ctx.send(callbackUpdate(callbacks.confirmDelete));
     assert.equal(await ctx.customers.count(), 0);
-    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, messages.deleteDone);
+    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, messages.t("ru").deleteDone);
+    assert.equal(ctx.telegram.callsTo("deleteMyCommands").length, 1);
 
     // Later interactions must not silently recreate the record.
     await ctx.send(messageUpdate("/help"));
@@ -298,16 +379,21 @@ describe("/delete_my_data", () => {
   });
 
   it("keeps data when deletion is cancelled", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start"));
+    const ctx = await registered("en");
     await ctx.send(callbackUpdate(callbacks.cancelDelete));
     assert.equal(await ctx.customers.count(), 1);
-    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, messages.deleteCancelled);
+    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, en.deleteCancelled);
   });
 
   it("tells unknown users there is nothing to delete", async () => {
     const ctx = await context();
     await ctx.send(callbackUpdate(callbacks.confirmDelete));
-    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, messages.deleteNothing);
+    assert.equal(ctx.telegram.callsTo("editMessageText")[0]?.payload.text, en.deleteNothing);
+  });
+
+  it("is only available in private chats", async () => {
+    const ctx = await registered("en");
+    await ctx.send(messageUpdate("/delete_my_data", { chat: { id: -100555, type: "supergroup", title: "Group" } }));
+    assert.equal(ctx.telegram.sentTexts()[0], en.privateChatOnly);
   });
 });

@@ -22,10 +22,20 @@ Anyone on Telegram can use the bot. No phone number, birthday or bio is ever req
 | `/services` | Services from `BEAUTY_SALON_SERVICES` |
 | `/contact` | Address, contact and working hours |
 | `/privacy` | What is collected, why, and how to delete it |
+| `/language` | Choose Armenian, Russian or English |
 | `/delete_my_data` | Deletes the customer record after confirmation (private chats only) |
 | `/help` | Command list |
 
 The main menu uses inline buttons for the same actions. Stored customer data is not shown to users in the bot. The salon views it in MongoDB Atlas (**Browse Collections → beauty_salon → customers**).
+
+## Languages
+
+The bot speaks **Armenian (hy)**, **Russian (ru)** and **English (en)**. All texts are in `src/bot/messages.ts`.
+
+- On a user's first `/start`, the bot asks them to pick a language. The choice is stored as `preferredLanguage` and also sets their command menu.
+- Before a choice is made, the bot uses Telegram's app language (`ru`, `uk`, `be`, … → Russian, `en` → English, `hy` → Armenian), otherwise `DEFAULT_LANGUAGE`.
+- Users can switch at any time with `/language` or the 🌐 button.
+- Salon address, contact, working hours and services can be set per language with `_HY`, `_RU`, `_EN` suffixes, for example `BEAUTY_SALON_SERVICES_RU`. A variable without a suffix is used for languages that have no value of their own.
 
 ## What is stored
 
@@ -39,6 +49,7 @@ Collection `customers`, one document per Telegram user:
 | `isBot` | `from.is_bot` (bot accounts are not registered) |
 | `chatType`, `chatTitle` | `chat.type`, `chat.title` (title only for groups) |
 | `profilePhotoFileId`, `profilePhotoFileUniqueId`, `profilePhotoCheckedAt` | `getUserProfilePhotos` (identifiers only, the image is never downloaded) |
+| `preferredLanguage` | `hy`, `ru` or `en`, chosen by the user (absent until chosen) |
 | `registrationSource` | `start` or `start:<deep-link payload>`, set once |
 | `lastEvent` | e.g. `start_command`, `command:services`, `callback_query` |
 | `registeredAt` | set once on first registration, never changed |
@@ -79,7 +90,9 @@ Fill in `.env`:
 | `MONGODB_DB_NAME` | no | Default `beauty_salon` |
 | `BEAUTY_SALON_NAME`, `BEAUTY_SALON_ADDRESS`, `BEAUTY_SALON_CONTACT` | yes | Shown to customers |
 | `BEAUTY_SALON_WORKING_HOURS` | no | Shown in `/contact` |
-| `BEAUTY_SALON_SERVICES` | no | `name\|price\|duration;name\|price\|duration` |
+| `BEAUTY_SALON_SERVICES` | no | `name\|price\|duration;name` (price and duration optional) |
+| `…_HY`, `…_RU`, `…_EN` | no | Per-language versions of the address, contact, hours and services variables |
+| `DEFAULT_LANGUAGE` | no | `hy` (default), `ru` or `en` |
 | `BOT_MODE` | no | `polling` (default) or `webhook` |
 | `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET` | webhook only | https URL; secret of 16–256 chars `A-Z a-z 0-9 _ -` |
 | `PORT`, `HOST` | no | Webhook listener, default `8080` / `0.0.0.0` |

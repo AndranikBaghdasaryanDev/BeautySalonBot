@@ -1,6 +1,5 @@
-import type { BotCommand } from "grammy/types";
+import { registerCommands } from "./bot/commands.ts";
 import { createBot } from "./bot/createBot.ts";
-import { commandDescriptions } from "./bot/messages.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { MongoCustomerRepository } from "./db/customerRepository.ts";
 import { connectMongo, ensureSchema } from "./db/mongo.ts";
@@ -40,8 +39,7 @@ async function main(): Promise<void> {
   });
 
   await bot.init();
-  const commands: BotCommand[] = commandDescriptions.map((c) => ({ command: c.command, description: c.description }));
-  await bot.api.setMyCommands(commands);
+  await registerCommands(bot.api);
   logger.info("Bot initialised", { bot: bot.botInfo.username, mode: config.mode });
 
   let stop: () => Promise<void>;

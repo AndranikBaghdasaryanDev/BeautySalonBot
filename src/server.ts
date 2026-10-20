@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { webhookCallback, type Bot } from "grammy";
+import type { BotContext } from "./bot/createBot.ts";
 import { describeError, type Logger } from "./logger.ts";
 
 /**
@@ -7,7 +8,7 @@ import { describeError, type Logger } from "./logger.ts";
  * correct X-Telegram-Bot-Api-Secret-Token header reach the bot; grammY answers
  * 401 otherwise. No customer data is exposed over HTTP.
  */
-export function createWebhookServer(bot: Bot, path: string, secret: string, logger: Logger): Server {
+export function createWebhookServer(bot: Bot<BotContext>, path: string, secret: string, logger: Logger): Server {
   const handleUpdate = webhookCallback(bot, "http", { secretToken: secret, onTimeout: "return" });
 
   return createServer((req, res) => {

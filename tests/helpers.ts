@@ -46,10 +46,15 @@ export const TEST_TOKEN = `123456789:${"A".repeat(35)}`;
 
 export const testSalon: SalonConfig = {
   name: "Test Salon",
-  address: "[Placeholder address]",
-  contact: "[Placeholder contact]",
-  workingHours: "[Placeholder hours]",
-  services: [{ name: "Service A", price: "[price]", duration: "60 min" }],
+  contact: { hy: "[Կոնտակտ]", ru: "[Контакт]", en: "[Placeholder contact]" },
+  address: { hy: "[Հասցե]", ru: "[Адрес]", en: "[Placeholder address]" },
+  workingHours: { hy: "[Ժամեր]", ru: "[Часы]", en: "[Placeholder hours]" },
+  services: {
+    hy: [{ name: "Մանիկյուր", price: null, duration: null }],
+    ru: [{ name: "Маникюр", price: null, duration: null }],
+    en: [{ name: "Service A", price: "[price]", duration: "60 min" }],
+  },
+  defaultLanguage: "hy",
 };
 
 export const botInfo: UserFromGetMe = {

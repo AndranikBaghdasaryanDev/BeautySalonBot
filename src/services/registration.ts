@@ -1,5 +1,10 @@
 import type { Chat, User } from "grammy/types";
-import type { CustomerRepository, TelegramProfileSnapshot, UpsertResult } from "../db/customerRepository.ts";
+import type {
+  Customer,
+  CustomerRepository,
+  TelegramProfileSnapshot,
+  UpsertResult,
+} from "../db/customerRepository.ts";
 
 export type SnapshotResult =
   | { readonly ok: true; readonly snapshot: TelegramProfileSnapshot }
@@ -63,7 +68,7 @@ export class RegistrationService {
     return this.customers.registerOrUpdate(snapshot, registrationSource(startPayload), "start_command", at);
   }
 
-  recordInteraction(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<boolean> {
+  recordInteraction(snapshot: TelegramProfileSnapshot, event: string, at: Date): Promise<Customer | null> {
     return this.customers.touchIfRegistered(snapshot, event, at);
   }
 }

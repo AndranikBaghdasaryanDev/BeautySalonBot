@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ConfigError, loadConfig, parseServices } from "../src/config.ts";
+import { detectLanguage } from "../src/i18n.ts";
 import { TEST_TOKEN } from "./helpers.ts";
 
 const validEnv = {
@@ -17,7 +18,25 @@ describe("loadConfig", () => {
     assert.equal(config.mode, "polling");
     assert.equal(config.webhook, null);
     assert.equal(config.mongo.dbName, "beauty_salon");
-    assert.deepEqual(config.salon.services, []);
+    assert.deepEqual(config.salon.services, { hy: [], ru: [], en: [] });
+    assert.deepEqual(config.salon.address, { hy: "[address]", ru: "[address]", en: "[address]" });
+    assert.equal(config.salon.defaultLanguage, "hy");
+  });
+
+  it("reads per-language values with a shared fallback", () => {
+    const config = loadConfig({
+      ...validEnv,
+      BEAUTY_SALON_ADDRESS_HY: "Երևան",
+      BEAUTY_SALON_ADDRESS_RU: "Ереван",
+      BEAUTY_SALON_SERVICES: "Manicure",
+      BEAUTY_SALON_SERVICES_HY: "Մանիկյուր;Պեդիկյուր",
+      DEFAULT_LANGUAGE: "ru",
+    });
+    assert.deepEqual(config.salon.address, { hy: "Երևան", ru: "Ереван", en: "[address]" });
+    assert.equal(config.salon.services.hy.length, 2);
+    assert.equal(config.salon.services.ru[0]?.name, "Manicure");
+    assert.equal(config.salon.defaultLanguage, "ru");
+    assert.throws(() => loadConfig({ ...validEnv, DEFAULT_LANGUAGE: "de" }), ConfigError);
   });
 
   it("requires the bot token, MongoDB URI and salon details", () => {
@@ -48,14 +67,26 @@ describe("loadConfig", () => {
 });
 
 describe("parseServices", () => {
-  it("parses name|price|duration entries", () => {
-    assert.deepEqual(parseServices("Cut|[price]|45 min; Colour|[price]"), [
+  it("parses name|price|duration entries with optional price and duration", () => {
+    assert.deepEqual(parseServices("Cut|[price]|45 min; Colour|[price]; Manicure"), [
       { name: "Cut", price: "[price]", duration: "45 min" },
       { name: "Colour", price: "[price]", duration: null },
+      { name: "Manicure", price: null, duration: null },
     ]);
   });
 
-  it("rejects incomplete entries", () => {
-    assert.throws(() => parseServices("OnlyName"), ConfigError);
+  it("rejects entries without a name", () => {
+    assert.throws(() => parseServices("|[price]"), ConfigError);
+  });
+});
+
+describe("detectLanguage", () => {
+  it("maps Telegram app languages to supported languages", () => {
+    assert.equal(detectLanguage("hy", "en"), "hy");
+    assert.equal(detectLanguage("ru", "hy"), "ru");
+    assert.equal(detectLanguage("uk", "hy"), "ru");
+    assert.equal(detectLanguage("en-GB", "hy"), "en");
+    assert.equal(detectLanguage("de", "hy"), "hy");
+    assert.equal(detectLanguage(null, "en"), "en");
   });
 });

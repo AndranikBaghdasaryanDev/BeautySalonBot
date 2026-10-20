@@ -158,10 +158,10 @@ describe("MongoCustomerRepository", () => {
 
   it("touchIfRegistered never creates customers", async () => {
     const { repo } = await freshRepository();
-    assert.equal(await repo.touchIfRegistered(base, "message", t0), false);
+    assert.equal(await repo.touchIfRegistered(base, "message", t0), null);
     assert.equal(await repo.count(), 0);
     await repo.registerOrUpdate(base, "start", "start_command", t0);
-    assert.equal(await repo.touchIfRegistered(base, "command:help", t1), true);
+    assert.equal((await repo.touchIfRegistered(base, "command:help", t1))?.lastEvent, "command:help");
     const customer = await repo.findByTelegramUserId(base.telegramUserId);
     assert.equal(customer?.lastEvent, "command:help");
     assert.deepEqual(customer.registeredAt, t0);
@@ -187,6 +187,21 @@ describe("MongoCustomerRepository", () => {
     await repo.updateProfilePhoto(base.telegramUserId, null, t1);
     customer = await repo.findByTelegramUserId(base.telegramUserId);
     assert.equal(customer?.profilePhotoFileId, null);
+  });
+
+  it("stores the preferred language and keeps it across registrations", async () => {
+    const { db, repo } = await freshRepository();
+    assert.equal(await repo.setPreferredLanguage(base.telegramUserId, "hy", t0), false);
+    await repo.registerOrUpdate(base, "start", "start_command", t0);
+    assert.equal(await repo.setPreferredLanguage(base.telegramUserId, "hy", t1), true);
+    const { customer } = await repo.registerOrUpdate(base, "start", "start_command", t1);
+    assert.equal(customer.preferredLanguage, "hy");
+    await assert.rejects(
+      db.collection(COLLECTIONS.customers).updateOne({ telegramUserId: base.telegramUserId }, {
+        $set: { preferredLanguage: "xx" },
+      }),
+      /Document failed validation/,
+    );
   });
 
   it("deletes a customer completely", async () => {

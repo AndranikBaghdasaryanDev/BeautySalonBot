@@ -1,13 +1,24 @@
 import { Bot, GrammyError, type ApiClientOptions, type Context } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import type { SalonConfig } from "../config.ts";
-import type { CustomerRepository, UpsertResult } from "../db/customerRepository.ts";
+import type { Customer, CustomerRepository, UpsertResult } from "../db/customerRepository.ts";
 import type { ProcessedUpdateRepository } from "../db/processedUpdateRepository.ts";
+import { detectLanguage, type Lang } from "../i18n.ts";
 import { describeError, type Logger } from "../logger.ts";
 import { ProfilePhotoService } from "../services/profilePhoto.ts";
 import { extractSnapshot, RegistrationService } from "../services/registration.ts";
-import { callbacks, deleteConfirmation, mainMenu } from "./keyboards.ts";
+import { registerChatCommands } from "./commands.ts";
+import {
+  callbacks,
+  deleteConfirmation,
+  languageMenu,
+  mainMenu,
+  parseLanguageCallback,
+} from "./keyboards.ts";
 import * as messages from "./messages.ts";
+
+/** Context with the language every reply in this update should use. */
+export type BotContext = Context & { lang: Lang };
 
 export interface BotDependencies {
   readonly token: string;
@@ -35,19 +46,28 @@ function eventName(ctx: Context): string {
   return "message";
 }
 
-export function createBot(deps: BotDependencies): Bot {
+export function createBot(deps: BotDependencies): Bot<BotContext> {
   const { salon, customers, processedUpdates, logger } = deps;
   const now = deps.now ?? (() => new Date());
-  const botConfig: ConstructorParameters<typeof Bot>[1] = {};
+  const botConfig: ConstructorParameters<typeof Bot<BotContext>>[1] = {};
   if (deps.botInfo !== undefined) botConfig.botInfo = deps.botInfo;
   if (deps.client !== undefined) botConfig.client = deps.client;
-  const bot = new Bot(deps.token, botConfig);
+  const bot = new Bot<BotContext>(deps.token, botConfig);
 
   const registration = new RegistrationService(customers);
   const photos = new ProfilePhotoService(bot.api, customers, logger, deps.profilePhotoRefreshHours);
 
-  const replyHtml = (ctx: Context, text: string) =>
-    ctx.reply(text, { parse_mode: "HTML", reply_markup: mainMenu(), link_preview_options: { is_disabled: true } });
+  const languageOf = (customer: Customer | null, ctx: Context): Lang =>
+    customer?.preferredLanguage ?? detectLanguage(ctx.from?.language_code, salon.defaultLanguage);
+
+  const replyHtml = (ctx: BotContext, text: string) =>
+    ctx.reply(text, {
+      parse_mode: "HTML",
+      reply_markup: mainMenu(ctx.lang),
+      link_preview_options: { is_disabled: true },
+    });
+
+  const askLanguage = (ctx: BotContext) => ctx.reply(messages.LANGUAGE_PROMPT, { reply_markup: languageMenu() });
 
   // Duplicate delivery guard: Telegram may resend a webhook update it considers undelivered.
   bot.use(async (ctx, next) => {
@@ -81,6 +101,12 @@ export function createBot(deps: BotDependencies): Bot {
     }
   });
 
+  // Until the stored preference is known, use the language of the Telegram app.
+  bot.use(async (ctx, next) => {
+    ctx.lang = languageOf(null, ctx);
+    await next();
+  });
+
   bot.command("start", async (ctx) => {
     const extracted = extractSnapshot(ctx.from, ctx.chat);
     if (!extracted.ok) {
@@ -93,14 +119,19 @@ export function createBot(deps: BotDependencies): Bot {
       result = await registration.register(extracted.snapshot, ctx.match, now());
     } catch (error) {
       logger.error("Customer registration failed", { error: describeError(error) });
-      await ctx.reply(messages.genericError);
+      await ctx.reply(messages.t(ctx.lang).genericError);
       return;
     }
     logger.info(result.created ? "Customer registered" : "Customer refreshed", {
       customerId: result.customer.id,
     });
 
-    await replyHtml(ctx, messages.welcome(salon, result.customer.firstName, result.created));
+    if (result.customer.preferredLanguage === null) {
+      await askLanguage(ctx);
+    } else {
+      ctx.lang = result.customer.preferredLanguage;
+      await replyHtml(ctx, messages.welcome(ctx.lang, salon, result.customer.firstName, false));
+    }
 
     try {
       await photos.sync(result.customer, now());
@@ -110,12 +141,13 @@ export function createBot(deps: BotDependencies): Bot {
   });
 
   // Every later interaction refreshes metadata and last_interaction_at of
-  // already registered customers. It never creates a record.
+  // already registered customers, and loads their language. It never creates a record.
   bot.use(async (ctx, next) => {
     const extracted = extractSnapshot(ctx.from, ctx.chat);
     if (extracted.ok) {
       try {
-        await registration.recordInteraction(extracted.snapshot, eventName(ctx), now());
+        const customer = await registration.recordInteraction(extracted.snapshot, eventName(ctx), now());
+        ctx.lang = languageOf(customer, ctx);
       } catch (error) {
         logger.error("Could not record interaction", { error: describeError(error) });
       }
@@ -123,29 +155,31 @@ export function createBot(deps: BotDependencies): Bot {
     await next();
   });
 
-  const showServices = (ctx: Context) => replyHtml(ctx, messages.services(salon));
-  const showContact = (ctx: Context) => replyHtml(ctx, messages.contact(salon));
-  const showPrivacy = (ctx: Context) => replyHtml(ctx, messages.privacy(salon));
-  const showHelp = (ctx: Context) => replyHtml(ctx, messages.help(salon));
+  const showServices = (ctx: BotContext) => replyHtml(ctx, messages.services(ctx.lang, salon));
+  const showContact = (ctx: BotContext) => replyHtml(ctx, messages.contact(ctx.lang, salon));
+  const showPrivacy = (ctx: BotContext) => replyHtml(ctx, messages.privacy(ctx.lang, salon));
+  const showHelp = (ctx: BotContext) => replyHtml(ctx, messages.help(ctx.lang, salon));
 
   bot.command("help", showHelp);
   bot.command("services", showServices);
   bot.command("contact", showContact);
   bot.command("privacy", showPrivacy);
+  bot.command("language", askLanguage);
 
   bot.command("delete_my_data", async (ctx) => {
     if (ctx.chat.type !== "private") {
-      await ctx.reply(messages.privateChatOnly);
+      await ctx.reply(messages.t(ctx.lang).privateChatOnly);
       return;
     }
-    await ctx.reply(messages.deleteConfirm, { reply_markup: deleteConfirmation() });
+    await ctx.reply(messages.t(ctx.lang).deleteConfirm, { reply_markup: deleteConfirmation(ctx.lang) });
   });
 
-  const menuActions: ReadonlyArray<readonly [string, (ctx: Context) => Promise<unknown>]> = [
+  const menuActions: ReadonlyArray<readonly [string, (ctx: BotContext) => Promise<unknown>]> = [
     [callbacks.services, showServices],
     [callbacks.contact, showContact],
     [callbacks.privacy, showPrivacy],
     [callbacks.help, showHelp],
+    [callbacks.language, askLanguage],
   ];
   for (const [data, action] of menuActions) {
     bot.callbackQuery(data, async (ctx) => {
@@ -154,10 +188,35 @@ export function createBot(deps: BotDependencies): Bot {
     });
   }
 
+  bot.callbackQuery(/^lang:/, async (ctx) => {
+    const lang = parseLanguageCallback(ctx.callbackQuery.data);
+    await ctx.answerCallbackQuery();
+    if (lang === null) return;
+
+    let saved = false;
+    try {
+      saved = await customers.setPreferredLanguage(BigInt(ctx.from.id), lang, now());
+    } catch (error) {
+      logger.error("Saving language failed", { error: describeError(error) });
+    }
+    ctx.lang = lang;
+
+    await ctx.editMessageText(messages.t(lang).languageChosen);
+    if (saved && ctx.chat?.type === "private") {
+      try {
+        await registerChatCommands(ctx.api, ctx.chat.id, lang);
+      } catch (error) {
+        logger.warn("Could not set chat commands", { error: describeError(error) });
+      }
+    }
+    await replyHtml(ctx, messages.welcome(lang, salon, ctx.from.first_name, true));
+  });
+
   bot.callbackQuery(callbacks.confirmDelete, async (ctx) => {
     await ctx.answerCallbackQuery();
+    const text = messages.t(ctx.lang);
     if (ctx.chat?.type !== "private") {
-      await ctx.reply(messages.privateChatOnly);
+      await ctx.reply(text.privateChatOnly);
       return;
     }
     let deleted: boolean;
@@ -165,16 +224,24 @@ export function createBot(deps: BotDependencies): Bot {
       deleted = await customers.deleteByTelegramUserId(BigInt(ctx.from.id));
     } catch (error) {
       logger.error("Customer deletion failed", { error: describeError(error) });
-      await ctx.reply(messages.genericError);
+      await ctx.reply(text.genericError);
       return;
     }
     logger.info(deleted ? "Customer data deleted" : "Deletion requested by unknown user");
-    await ctx.editMessageText(deleted ? messages.deleteDone : messages.deleteNothing);
+    await ctx.editMessageText(deleted ? text.deleteDone : text.deleteNothing);
+    if (deleted) {
+      try {
+        // Drop the per-chat command menu that stored the language choice.
+        await ctx.api.deleteMyCommands({ scope: { type: "chat", chat_id: ctx.chat.id } });
+      } catch (error) {
+        logger.warn("Could not reset chat commands", { error: describeError(error) });
+      }
+    }
   });
 
   bot.callbackQuery(callbacks.cancelDelete, async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(messages.deleteCancelled);
+    await ctx.editMessageText(messages.t(ctx.lang).deleteCancelled);
   });
 
   bot.on("callback_query", async (ctx) => {
@@ -182,7 +249,7 @@ export function createBot(deps: BotDependencies): Bot {
   });
 
   bot.chatType("private").on("message", async (ctx) => {
-    await replyHtml(ctx, messages.unknownInput);
+    await replyHtml(ctx, messages.t(ctx.lang).unknownInput);
   });
 
   bot.catch((error) => {

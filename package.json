@@ -1,0 +1,32 @@
+{
+  "name": "beauty-salon-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for a beauty salon with automatic customer registration",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "db:setup": "node --env-file-if-exists=.env dist/setupDatabase.js",
+    "dev": "node --env-file-if-exists=.env src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build"
+  },
+  "dependencies": {
+    "grammy": "^1.46.0",
+    "mongodb": "^6.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.39.0",
+    "mongodb-memory-server": "^10.4.3",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}

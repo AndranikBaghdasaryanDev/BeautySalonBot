@@ -1,0 +1,156 @@
+export type BotMode = "polling" | "webhook";
+
+export interface SalonService {
+  readonly name: string;
+  readonly price: string;
+  readonly duration: string | null;
+}
+
+export interface SalonConfig {
+  readonly name: string;
+  readonly address: string;
+  readonly contact: string;
+  readonly workingHours: string | null;
+  readonly services: readonly SalonService[];
+}
+
+export interface WebhookConfig {
+  readonly url: string;
+  readonly secret: string;
+  readonly path: string;
+  readonly port: number;
+  readonly host: string;
+}
+
+export interface MongoConfig {
+  readonly uri: string;
+  readonly dbName: string;
+}
+
+export interface AppConfig {
+  readonly botToken: string;
+  readonly mode: BotMode;
+  readonly webhook: WebhookConfig | null;
+  readonly mongo: MongoConfig;
+  readonly profilePhotoRefreshHours: number;
+  readonly salon: SalonConfig;
+}
+
+export class ConfigError extends Error {
+  override readonly name = "ConfigError";
+}
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+const BOT_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{30,}$/;
+// Telegram only accepts 1-256 characters A-Z, a-z, 0-9, "_" and "-" for secret_token.
+const WEBHOOK_SECRET_PATTERN = /^[A-Za-z0-9_-]{16,256}$/;
+
+function optional(env: Env, key: string): string | null {
+  const value = env[key]?.trim();
+  return value === undefined || value === "" ? null : value;
+}
+
+function required(env: Env, key: string): string {
+  const value = optional(env, key);
+  if (value === null) {
+    throw new ConfigError(`Missing required environment variable ${key}`);
+  }
+  return value;
+}
+
+function positiveInteger(env: Env, key: string, fallback: number): number {
+  const raw = optional(env, key);
+  if (raw === null) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new ConfigError(`${key} must be a positive integer`);
+  }
+  return value;
+}
+
+/**
+ * Parses BEAUTY_SALON_SERVICES. Entries are separated by ";" and each entry is
+ * "name|price|duration" where duration is optional.
+ */
+export function parseServices(raw: string | null): SalonService[] {
+  if (raw === null) return [];
+  return raw
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "")
+    .map((entry) => {
+      const [name = "", price = "", duration = ""] = entry.split("|").map((part) => part.trim());
+      if (name === "" || price === "") {
+        throw new ConfigError(`Invalid BEAUTY_SALON_SERVICES entry "${entry}". Expected "name|price|duration"`);
+      }
+      return { name, price, duration: duration === "" ? null : duration };
+    });
+}
+
+const DB_NAME_PATTERN = /^[A-Za-z0-9_-]{1,38}$/;
+
+export function loadMongoConfig(env: Env = process.env): MongoConfig {
+  const uri = required(env, "MONGODB_URI");
+  if (!uri.startsWith("mongodb+srv://") && !uri.startsWith("mongodb://")) {
+    throw new ConfigError("MONGODB_URI must start with mongodb+srv:// or mongodb://");
+  }
+  const dbName = optional(env, "MONGODB_DB_NAME") ?? "beauty_salon";
+  if (!DB_NAME_PATTERN.test(dbName)) {
+    throw new ConfigError("MONGODB_DB_NAME may only contain letters, digits, '_' and '-' (max 38)");
+  }
+  return { uri, dbName };
+}
+
+function parseWebhook(env: Env): WebhookConfig {
+  const url = required(env, "TELEGRAM_WEBHOOK_URL");
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new ConfigError("TELEGRAM_WEBHOOK_URL must be a valid URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new ConfigError("TELEGRAM_WEBHOOK_URL must use https");
+  }
+  const secret = required(env, "TELEGRAM_WEBHOOK_SECRET");
+  if (!WEBHOOK_SECRET_PATTERN.test(secret)) {
+    throw new ConfigError(
+      "TELEGRAM_WEBHOOK_SECRET must be 16-256 characters of A-Z, a-z, 0-9, '_' or '-'",
+    );
+  }
+  return {
+    url,
+    secret,
+    path: parsed.pathname === "" ? "/" : parsed.pathname,
+    port: positiveInteger(env, "PORT", 8080),
+    host: optional(env, "HOST") ?? "0.0.0.0",
+  };
+}
+
+export function loadConfig(env: Env = process.env): AppConfig {
+  const botToken = required(env, "TELEGRAM_BOT_TOKEN");
+  if (!BOT_TOKEN_PATTERN.test(botToken)) {
+    throw new ConfigError("TELEGRAM_BOT_TOKEN has an invalid format");
+  }
+
+  const modeRaw = optional(env, "BOT_MODE") ?? "polling";
+  if (modeRaw !== "polling" && modeRaw !== "webhook") {
+    throw new ConfigError('BOT_MODE must be "polling" or "webhook"');
+  }
+
+  return {
+    botToken,
+    mode: modeRaw,
+    webhook: modeRaw === "webhook" ? parseWebhook(env) : null,
+    mongo: loadMongoConfig(env),
+    profilePhotoRefreshHours: positiveInteger(env, "PROFILE_PHOTO_REFRESH_HOURS", 24),
+    salon: {
+      name: required(env, "BEAUTY_SALON_NAME"),
+      address: required(env, "BEAUTY_SALON_ADDRESS"),
+      contact: required(env, "BEAUTY_SALON_CONTACT"),
+      workingHours: optional(env, "BEAUTY_SALON_WORKING_HOURS"),
+      services: parseServices(optional(env, "BEAUTY_SALON_SERVICES")),
+    },
+  };
+}

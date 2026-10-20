@@ -102,6 +102,16 @@ export function loadMongoConfig(env: Env = process.env): MongoConfig {
   return { uri, dbName };
 }
 
+export function loadWebhookSecret(env: Env = process.env): string {
+  const secret = required(env, "TELEGRAM_WEBHOOK_SECRET");
+  if (!WEBHOOK_SECRET_PATTERN.test(secret)) {
+    throw new ConfigError(
+      "TELEGRAM_WEBHOOK_SECRET must be 16-256 characters of A-Z, a-z, 0-9, '_' or '-'",
+    );
+  }
+  return secret;
+}
+
 function parseWebhook(env: Env): WebhookConfig {
   const url = required(env, "TELEGRAM_WEBHOOK_URL");
   let parsed: URL;
@@ -113,15 +123,9 @@ function parseWebhook(env: Env): WebhookConfig {
   if (parsed.protocol !== "https:") {
     throw new ConfigError("TELEGRAM_WEBHOOK_URL must use https");
   }
-  const secret = required(env, "TELEGRAM_WEBHOOK_SECRET");
-  if (!WEBHOOK_SECRET_PATTERN.test(secret)) {
-    throw new ConfigError(
-      "TELEGRAM_WEBHOOK_SECRET must be 16-256 characters of A-Z, a-z, 0-9, '_' or '-'",
-    );
-  }
   return {
     url,
-    secret,
+    secret: loadWebhookSecret(env),
     path: parsed.pathname === "" ? "/" : parsed.pathname,
     port: positiveInteger(env, "PORT", 8080),
     host: optional(env, "HOST") ?? "0.0.0.0",

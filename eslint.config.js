@@ -2,13 +2,17 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/", "node_modules/", "data/"] },
+  { ignores: ["dist/", "node_modules/", "data/", ".vercel/"] },
+  {
+    files: ["api/*.js"],
+    languageOptions: { globals: { Response: "readonly", Request: "readonly" } },
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ["eslint.config.js"] },
+        projectService: { allowDefaultProject: ["eslint.config.js", "api/*.js"] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -29,7 +33,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["eslint.config.js"],
+    files: ["eslint.config.js", "api/*.js"],
     extends: [tseslint.configs.disableTypeChecked],
   },
 );

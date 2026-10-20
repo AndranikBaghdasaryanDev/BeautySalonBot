@@ -100,6 +100,23 @@ For development without a build step (Node 24 runs TypeScript directly): `npm ru
 
 Polling mode needs no public URL and suits a single always-on process. For webhook mode, run the bot behind HTTPS (a reverse proxy or a platform such as Render or Railway), set `BOT_MODE=webhook` plus the webhook variables, and the bot registers the webhook with Telegram's secret-token header on start. Requests without the correct `X-Telegram-Bot-Api-Secret-Token` are rejected with 401. `GET /healthz` is available for health checks.
 
+### Deploying to Vercel (24/7, webhook mode)
+
+The repository is a ready Vercel project. `npm run build` compiles to `dist/`, and `api/telegram.js` exposes the bot as a serverless function at `/api/telegram`. The MongoDB connection is reused between invocations.
+
+1. Import the GitHub repository in Vercel (or run `vercel link`). Pushes to `main` then deploy automatically.
+2. In **Project → Settings → Environment Variables** (Production), add `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `MONGODB_URI`, `MONGODB_DB_NAME` and the `BEAUTY_SALON_*` variables.
+3. In MongoDB Atlas **Network Access**, allow `0.0.0.0/0`. Vercel functions have no fixed IP addresses, so the database user's password protects the database.
+4. After the first deployment, point Telegram at it once:
+   ```bash
+   TELEGRAM_WEBHOOK_URL=https://<your-project>.vercel.app/api/telegram npm run webhook:set
+   ```
+   On Windows PowerShell: `$env:TELEGRAM_WEBHOOK_URL="https://<your-project>.vercel.app/api/telegram"; npm run webhook:set`
+
+To change salon details, edit the environment variables in Vercel and redeploy.
+
+> Do not run `npm start` (polling mode) on your computer while the webhook is active. Long polling removes the webhook, and the deployed bot stops receiving messages until you run `npm run webhook:set` again.
+
 ## Quality checks
 
 ```bash

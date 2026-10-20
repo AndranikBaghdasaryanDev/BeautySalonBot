@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "db:setup": "node --env-file-if-exists=.env dist/setupDatabase.js",
+    "webhook:set": "node --env-file-if-exists=.env dist/setWebhook.js",
     "dev": "node --env-file-if-exists=.env src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",

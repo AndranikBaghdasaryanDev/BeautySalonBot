@@ -1,5 +1,4 @@
 import type { SalonConfig } from "../config.ts";
-import type { Customer } from "../db/customerRepository.ts";
 
 /** All customer-facing text lives here, separate from handler logic. Messages use HTML parse mode. */
 
@@ -10,7 +9,6 @@ export function escapeHtml(value: string): string {
 export const buttonLabels = {
   services: "💅 Services",
   contact: "📍 Contact",
-  profile: "👤 My profile",
   privacy: "🔒 Privacy",
   help: "❓ Help",
   confirmDelete: "Yes, delete my data",
@@ -21,7 +19,6 @@ export const commandDescriptions = [
   { command: "start", description: "Open the main menu" },
   { command: "services", description: "Our services" },
   { command: "contact", description: "Salon address and contacts" },
-  { command: "profile", description: "Information we store about you" },
   { command: "privacy", description: "How we handle your data" },
   { command: "delete_my_data", description: "Delete your stored data" },
   { command: "help", description: "What this bot can do" },
@@ -30,7 +27,7 @@ export const commandDescriptions = [
 export function welcome(salon: SalonConfig, firstName: string | null, isNew: boolean): string {
   const name = firstName === null ? "" : `, ${escapeHtml(firstName)}`;
   const greeting = isNew ? `Welcome to <b>${escapeHtml(salon.name)}</b>${name}! ✨` : `Welcome back${name}! ✨`;
-  return `${greeting}\n\nChoose an option below to see our services, contact details or your profile.`;
+  return `${greeting}\n\nChoose an option below to see our services and contact details.`;
 }
 
 export function help(salon: SalonConfig): string {
@@ -40,7 +37,6 @@ export function help(salon: SalonConfig): string {
     "/start — main menu",
     "/services — services and prices",
     "/contact — address and contact details",
-    "/profile — the information we store about you",
     "/privacy — what we collect and why",
     "/delete_my_data — delete your stored data",
     "/help — this message",
@@ -69,31 +65,6 @@ export function contact(salon: SalonConfig): string {
   return lines.join("\n");
 }
 
-function formatDate(date: Date): string {
-  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
-}
-
-function field(label: string, value: string | null): string {
-  return `${label}: ${value === null ? "<i>not provided</i>" : escapeHtml(value)}`;
-}
-
-export function profile(customer: Customer): string {
-  return [
-    "<b>Your profile</b>",
-    "",
-    field("Telegram ID", customer.telegramUserId.toString()),
-    field("Username", customer.username === null ? null : `@${customer.username}`),
-    field("First name", customer.firstName),
-    field("Last name", customer.lastName),
-    field("Language", customer.languageCode),
-    field("Profile photo", customer.profilePhotoFileId === null ? null : "stored (file reference only)"),
-    field("Registered", formatDate(customer.registeredAt)),
-    field("Last interaction", formatDate(customer.lastInteractionAt)),
-    "",
-    "This is everything we store about you. Use /delete_my_data to remove it.",
-  ].join("\n");
-}
-
 export function privacy(salon: SalonConfig): string {
   return [
     "<b>Privacy</b>",
@@ -109,11 +80,10 @@ export function privacy(salon: SalonConfig): string {
     "",
     "We use this information only to recognise you and serve you in this bot. It is not sold or shared.",
     "",
-    "See it with /profile. Delete it at any time with /delete_my_data.",
+    "You can delete it at any time with /delete_my_data.",
   ].join("\n");
 }
 
-export const notRegistered = "You are not registered yet. Press /start to register.";
 export const privateChatOnly = "For your privacy, please use this command in a private chat with the bot.";
 export const deleteConfirm =
   "Are you sure? This permanently deletes all information we store about you. You can register again later with /start.";

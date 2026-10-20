@@ -21,12 +21,11 @@ Anyone on Telegram can use the bot. No phone number, birthday or bio is ever req
 | `/start` | Registers or refreshes the customer, then shows the welcome message and main menu. Deep links (`t.me/<bot>?start=instagram`) are recorded as the registration source. |
 | `/services` | Services from `BEAUTY_SALON_SERVICES` |
 | `/contact` | Address, contact and working hours |
-| `/profile` | Everything stored about the user (private chats only) |
 | `/privacy` | What is collected, why, and how to delete it |
 | `/delete_my_data` | Deletes the customer record after confirmation (private chats only) |
 | `/help` | Command list |
 
-The main menu uses inline buttons for the same actions.
+The main menu uses inline buttons for the same actions. Stored customer data is not shown to users in the bot. The salon views it in MongoDB Atlas (**Browse Collections → beauty_salon → customers**).
 
 ## What is stored
 
@@ -132,7 +131,7 @@ npm run check     # all of the above
 - Secrets come only from environment variables. `.env` is git-ignored.
 - Logs are structured JSON and contain no tokens, names, usernames or Telegram IDs (only the internal document id).
 - All user-supplied values are passed to MongoDB as `$literal` values, so a name like `$gt` can never act as an operator.
-- `/profile` and data deletion only work in private chats, so data is never shown in a group.
+- Data deletion only works in private chats.
 - No HTTP endpoint exposes customer data.
 - Deleting data removes the customer document. `processed_updates` contains no personal data.
 - Telegram API errors (for example a user who blocked the bot) are logged and not retried. Other failures are re-thrown so Telegram can redeliver the update.

@@ -185,8 +185,11 @@ describe("/start registration", () => {
       },
     });
     await ctx.send(messageUpdate("/start"));
-    await ctx.send(messageUpdate("/profile"));
-    assert.deepEqual(ctx.telegram.sentTexts(), [messages.genericError, messages.genericError]);
+    await ctx.send(messageUpdate("/delete_my_data"));
+    await ctx.send(callbackUpdate(callbacks.confirmDelete));
+    const texts = ctx.telegram.sentTexts();
+    assert.equal(texts[0], messages.genericError);
+    assert.equal(texts.at(-1), messages.genericError);
   });
 
   it("ignores /start from bot accounts", async () => {
@@ -237,7 +240,7 @@ describe("interactions", () => {
   it("never asks for phone numbers, birthdays or bios", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("/start"));
-    for (const command of ["/help", "/services", "/contact", "/privacy", "/profile", "/delete_my_data"]) {
+    for (const command of ["/help", "/services", "/contact", "/privacy", "/delete_my_data"]) {
       await ctx.send(messageUpdate(command));
     }
     const payloads = JSON.stringify(ctx.telegram.calls.map((call) => call.payload));
@@ -247,37 +250,32 @@ describe("interactions", () => {
   });
 });
 
-describe("/profile", () => {
-  it("shows stored information to the registered user", async () => {
+describe("stored data stays hidden from users", () => {
+  it("never shows stored profile data in any reply", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("/start"));
-    await ctx.send(messageUpdate("/profile"));
-    const text = ctx.telegram.sentTexts()[1] ?? "";
-    assert.match(text, /Telegram ID: 5000000001/);
-    assert.match(text, /Username: @anna_s/);
-    assert.match(text, /Language: en/);
-    assert.match(text, /Registered: 2026-01-01 10:00 UTC/);
-    assert.doesNotMatch(text, /phone|birth/i);
+    for (const input of ["/profile", "/help", "/services", "/contact", "/privacy", "hello"]) {
+      await ctx.send(messageUpdate(input));
+    }
+    await ctx.send(callbackUpdate("menu:profile"));
+    // The stored data is in the database...
+    assert.equal((await ctx.customers.findByTelegramUserId(userId))?.username, "anna_s");
+    // ...but no message after the welcome reveals the ID, username or surname.
+    for (const text of ctx.telegram.sentTexts().slice(1)) {
+      assert.ok(!text.includes(String(defaultUser.id)));
+      assert.ok(!text.includes("anna_s"));
+      assert.ok(!text.includes("Smith"));
+    }
   });
 
-  it("escapes HTML in names", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/start", { from: { ...defaultUser, first_name: "<b>x</b>" } }));
-    await ctx.send(messageUpdate("/profile", { from: { ...defaultUser, first_name: "<b>x</b>" } }));
-    assert.match(ctx.telegram.sentTexts()[1] ?? "", /First name: &lt;b&gt;x&lt;\/b&gt;/);
-  });
-
-  it("asks unregistered users to press /start", async () => {
-    const ctx = await context();
-    await ctx.send(messageUpdate("/profile"));
-    assert.deepEqual(ctx.telegram.sentTexts(), [messages.notRegistered]);
-  });
-
-  it("does not reveal profile data in group chats", async () => {
+  it("has no profile button or command", async () => {
     const ctx = await context();
     await ctx.send(messageUpdate("/start"));
-    await ctx.send(messageUpdate("/profile", { chat: { id: -100555, type: "supergroup", title: "Group" } }));
-    assert.equal(ctx.telegram.sentTexts()[1], messages.privateChatOnly);
+    const menu = JSON.stringify(ctx.telegram.callsTo("sendMessage")[0]?.payload.reply_markup);
+    assert.ok(!menu.includes("profile"));
+    assert.ok(!messages.commandDescriptions.some((c) => c.command.includes("profile")));
+    await ctx.send(messageUpdate("/profile"));
+    assert.equal(ctx.telegram.sentTexts().at(-1), messages.unknownInput);
   });
 });
 
@@ -295,9 +293,8 @@ describe("/delete_my_data", () => {
 
     // Later interactions must not silently recreate the record.
     await ctx.send(messageUpdate("/help"));
-    await ctx.send(messageUpdate("/profile"));
+    await ctx.send(messageUpdate("hello"));
     assert.equal(await ctx.customers.count(), 0);
-    assert.equal(ctx.telegram.sentTexts().at(-1), messages.notRegistered);
   });
 
   it("keeps data when deletion is cancelled", async () => {

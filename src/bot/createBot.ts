@@ -128,31 +128,10 @@ export function createBot(deps: BotDependencies): Bot {
   const showPrivacy = (ctx: Context) => replyHtml(ctx, messages.privacy(salon));
   const showHelp = (ctx: Context) => replyHtml(ctx, messages.help(salon));
 
-  const showProfile = async (ctx: Context) => {
-    if (ctx.chat?.type !== "private" || ctx.from === undefined) {
-      await ctx.reply(messages.privateChatOnly);
-      return;
-    }
-    let customer;
-    try {
-      customer = await customers.findByTelegramUserId(BigInt(ctx.from.id));
-    } catch (error) {
-      logger.error("Profile lookup failed", { error: describeError(error) });
-      await ctx.reply(messages.genericError);
-      return;
-    }
-    if (customer === null) {
-      await ctx.reply(messages.notRegistered);
-      return;
-    }
-    await replyHtml(ctx, messages.profile(customer));
-  };
-
   bot.command("help", showHelp);
   bot.command("services", showServices);
   bot.command("contact", showContact);
   bot.command("privacy", showPrivacy);
-  bot.command("profile", showProfile);
 
   bot.command("delete_my_data", async (ctx) => {
     if (ctx.chat.type !== "private") {
@@ -165,7 +144,6 @@ export function createBot(deps: BotDependencies): Bot {
   const menuActions: ReadonlyArray<readonly [string, (ctx: Context) => Promise<unknown>]> = [
     [callbacks.services, showServices],
     [callbacks.contact, showContact],
-    [callbacks.profile, showProfile],
     [callbacks.privacy, showPrivacy],
     [callbacks.help, showHelp],
   ];
